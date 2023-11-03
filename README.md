@@ -9,7 +9,7 @@ Dependencies need to be installed for both the client and server. In the client 
 ### Usage
 To run the development environment, open two terminal instances and run `flask –app run_evadb run` in the server folder and run `npm run vite` in the client folder.
 
-**NOTE: The frontend has been removed and this application will be converted to a CLI app. This will improve performance and will allow features to be implemented more quickly.**
+**NOTE: The frontend has been removed and this application will be converted to a CLI app. The commands to install dependencies for the client and to run the client are no longer applicable. This will improve performance and will allow features to be implemented more quickly.**
 
 ### Roadmap
 These are the following features I plan to add/improve:
