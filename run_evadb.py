@@ -1,0 +1,152 @@
+# Import the EvaDB package
+import evadb
+import pandas as pd
+import time
+from selenium import webdriver
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
+from flask import Flask
+from flask import request
+import os
+import json
+from flask_cors import CORS, cross_origin
+from dotenv import dotenv_values
+
+config = dotenv_values(".env") 
+
+os.environ["OPENAI_KEY"] = config["OPENAI_KEY"]
+
+app = Flask(__name__)
+cors = CORS(app, support_credentials=True)
+app.config['CORS_HEADERS'] = 'Content-Type'
+
+# Connect to EvaDB and get a database cursor for running queries
+cursor = evadb.connect().cursor()
+
+params = {
+    "user": "eva",
+    "password": "password",
+    "host": "localhost",
+    "port": "5432",
+    "database": "evadb",
+}
+
+# query = f"CREATE DATABASE postgres_data WITH ENGINE = 'postgres', PARAMETERS = {params};"
+# cursor.query(query).df()
+
+cursor.query("""
+USE postgres_data {
+  DROP TABLE IF EXISTS review_table
+}
+""").df()
+
+cursor.query("""
+USE postgres_data {
+  CREATE TABLE IF NOT EXISTS review_table (name VARCHAR(10), review VARCHAR(1000))
+}
+""").df()
+
+@app.route("/", methods = ['POST'])
+@cross_origin(origin='*', support_credentials=True)
+def hello_world():
+    data = request.get_json()
+
+    query = """
+    USE postgres_data {{
+      INSERT INTO review_table (name, review) VALUES ('{0}', '{1}')
+    }}
+    """
+    return cursor.query(query.format(data['username'], data['comment'])).df().to_json()
+
+@app.route("/comments")
+@cross_origin(origin='*', support_credentials=True)
+def get_all_comments():
+    dataframe =  cursor.query("""
+    SELECT name, review, ChatGPT(
+      "Is the video comment positive or negative. Only reply 'positive' or 'negative'. Here are examples. This video is terrible and has extremely biased opinions: negative. This video is super informative and provides great information about the topic: postive. Then, write a response to the viewer's comment. Use the delimiter | to separate the positive/negative and the response.",
+      review
+    ) FROM postgres_data.review_table;
+    """).df()
+
+    return json.dumps(json.loads(dataframe.to_json(orient='index')), indent=2)
+
+
+@app.route("/analyze")
+def analyze_comment():
+    return cursor.query("""
+    SELECT ChatGPT(
+      "Is the video comment positive or negative. Only reply 'positive' or 'negative'. Here are examples. This video is terrible and has extremely biased opinions: negative. This video is super informative and provides great information about the topic: postive.",
+      review
+    ), review
+    FROM postgres_data.review_table;
+    """).df().to_json()
+
+# NOT USED RIGHT NOW
+@app.route("/youtube")
+def youtube():
+    video_to_scrape = "https://www.youtube.com/watch?v=QlInLzcYtB4" # Provide YT Video URL
+
+    service = webdriver.ChromeService(executable_path = '/Users/edmundxin/dev/cs_4420/evadb-project1/chromedriver')
+    driver = webdriver.Chrome(service=service) # Provide path to chrome driver
+    driver.get(video_to_scrape)
+
+    SCROLL_PAUSE_TIME = 2 # I'll use this variable for code sleeping time
+    delay = 30 # delay time for WebDriver (in seconds)
+    scrolling = True # boolean value -> TRUE means that we're still scrolling, FALSE means we're not scrolling anymore
+    last_height = driver.execute_script("return document.documentElement.scrollHeight") # this is our last/current position on the page
+    all_comments_list = [] # we'll store all scraped comments in this list
+    scrolling_attempt = 5 # we'll have 5 attempts before turning scrolling boolean to False
+
+
+    def scrape_loaded_comments():
+        loaded_comments = []
+        # Locate all Usernames and Comments
+        all_usernames = WebDriverWait(driver, delay).until(
+            EC.presence_of_all_elements_located((By.XPATH, '//h3[@class="style-scope ytd-comment-renderer"]')))
+        all_comments = WebDriverWait(driver, delay).until(
+            EC.presence_of_all_elements_located((By.XPATH, '//yt-formatted-string[@id="content-text"]')))
+
+        try:
+            # we'll try to get only last 20 elements, because youtube loads 20 comments per scroll
+            all_comments = all_comments[-20:]
+            all_usernames = all_usernames[-20:]
+        except:
+            print("could not get last 20 elements")
+
+        # we'll loop parallel through all usernames and comments
+        for (username, comment) in zip(all_usernames, all_comments):
+            current_comment = {"username": username.text,
+                                "comment": comment.text}
+            print(f"Username : {username.text}\nComment : {comment.text}")
+            loaded_comments.append(current_comment)  # here we'll store comments
+
+        return loaded_comments
+
+
+    while scrolling == True:
+        htmlelement = driver.find_element(By.TAG_NAME, "body")  # locate html tag
+        htmlelement.send_keys(Keys.END) # scroll to the bottom of html tag
+        try:
+            last_20_comments = scrape_loaded_comments() # calling function to scrape last 20 comments
+            all_comments_list.append(last_20_comments) # appending last 20 comments to the list
+
+        except:
+            print("error while trying to load comments")
+
+        new_height = driver.execute_script("return document.documentElement.scrollHeight") # calculate current position
+        time.sleep(SCROLL_PAUSE_TIME) # make pause because scrolling will take 0.5/1 seconds
+        driver.implicitly_wait(30)  # make longer pause if loading new comments takes longer
+
+        if new_height == last_height: # if current position  is the same as last position, it means we've reached bottom of the page, so we'll break the loop
+            scrolling_attempt -= 1
+            print(f"scrolling attempt {scrolling_attempt}")
+            if(scrolling_attempt == 0):
+                scrolling = False # this will break while loop
+        last_height = new_height # if current position is not the same as last one, we'll set last position as new height
+
+
+
+    df = pd.DataFrame(all_comments_list) # create dataframe from our list
+    df.drop_duplicates(inplace=True) # drop all duplicates
