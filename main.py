@@ -33,21 +33,26 @@ USE postgres_data {
 
 cursor.query("""
 USE postgres_data {
-  CREATE TABLE IF NOT EXISTS comment_table (name VARCHAR(10), comment VARCHAR(1000), url VARCHAR(1000))
+  CREATE TABLE IF NOT EXISTS comment_table (name VARCHAR(100), comment VARCHAR(1000), url VARCHAR(1000))
 }
 """).df()
 
 sentiment_cached = True
 response_cached = True
+rating_cached = True
 
 sentiment_cache = []
 response_cache = []
+rating_cache = []
 
 def print_sentiment():
     print(tabulate(sentiment_cache, headers=['id', 'sentiment', 'comment', 'url']))
         
 def print_response():
     print(tabulate(response_cache, headers=['id', 'response', 'comment', 'url']))
+    
+def print_rating():
+    print(tabulate(rating_cache, headers=['id', 'rating', 'comment', 'url']))
 
 while command != 'q':
     if command == 'h':
@@ -130,6 +135,30 @@ while command != 'q':
             print_response()
         else:
             print("Invalid option")
+    elif command == 'stats':
+        print()
+        print("-----------------------------")
+        print('Loading...')
+        print("-----------------------------")
+        print()
+        results = cursor.query("""
+            SELECT ChatGPT(
+            "Generate a rating for sentiment between -1 and 1 where -1 is the most negative and 1 is the most positive. Only reply with a decimal number between -1 and 1. Do not include anything except a number. These are some possible outputs, 0.67, -0.13, -0.45. Don't say 'Based on the given context, I would rate the sentiment of the video as'. Here are some examples. This video is so horrible, one of the worst I've seen: '-0.9'. This is such an amazing video, it's so informative: '0.73'",
+            comment
+            ), comment, url
+            FROM postgres_data.comment_table;
+        """).df()
+        obj = json.loads(results.to_json())
+        rating_cache = []
+        total = 0
+        count = 0
+        for key in obj['chatgpt.response'].keys():
+            rating_cache.append((key, obj['chatgpt.response'][key], obj['comment_table.comment'][key], obj['comment_table.url'][key]))
+            total += float(obj['chatgpt.response'][key])
+            count += 1
+        rating_cached = True
+        print_rating()
+        print("Average: ", total / count)
     else:
         print("Invalid command")
     command = input("Type command (type h for help): ")
